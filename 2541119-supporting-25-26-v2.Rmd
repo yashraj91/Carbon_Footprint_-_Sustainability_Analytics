@@ -1,0 +1,573 @@
+---
+title: "CS5801 Coursework Supporting Analysis"
+author: "2541119"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document: default
+version: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 10, fig.height = 6)
+```
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(corrplot)
+library(gridExtra)
+library(effsize)  # For effect size calculations
+library(car)      # For VIF and model diagnostics
+```
+
+# 1. Organise and clean the data
+
+## 1.1 Subset the data into the specific dataset allocated
+
+```{r}
+# Student ID assignment for data subsetting
+student_id <- 2541119
+offset_value <- (student_id %% 50) + 1
+
+# Load the carbon footprint dataset
+load("carbon-footprint.Rda")
+
+# Subset the data
+working_dataset <- df[seq(from = offset_value, to = nrow(df), by = 50), ]
+
+# Initial data exploration
+cat("Dataset dimensions:", dim(working_dataset), "\n")
+cat("Variable names:", paste(names(working_dataset), collapse = ", "), "\n")
+```
+
+## 1.2 Data quality plan
+
+```{r}
+# Comprehensive data quality assessment code
+# This section contains all code used for systematic data quality evaluation
+
+# 1. Overall structure examination
+# Week 1: str() and summary() for data exploration (CS5702_W1_Lab_2025.Rmd)
+cat("=== Data Structure ===\n")
+str(working_dataset)  # Week 1: str() function
+cat("\n=== Data Summary ===\n")
+summary(working_dataset)  # Week 1: summary() function
+
+# 2. Missing values comprehensive check
+# Week 5: Missing data identification (CS5702_W5_Lab - Copy.Rmd)
+cat("\n=== Missing Values Analysis ===\n")
+missing_analysis <- data.frame(
+  Variable = names(working_dataset),
+  Missing_Count = colSums(is.na(working_dataset)),  # Week 2: colSums() with is.na() (CS5702_W2_Lab.Rmd)
+  Missing_Percentage = round(colSums(is.na(working_dataset)) / nrow(working_dataset) * 100, 2),
+  Data_Type = sapply(working_dataset, class)  # Week 2: sapply() for applying functions
+)
+print(missing_analysis)
+
+# 3. Data type verification
+cat("\n=== Data Type Verification ===\n")
+variable_types <- sapply(working_dataset, class)
+print(variable_types)
+
+# 4. Check for duplicate observations
+cat("\n=== Duplicate Check ===\n")
+cat("Number of duplicate rows:", sum(duplicated(working_dataset)), "\n")
+
+# 5. Range checks for continuous variables
+# Week 1: Summary statistics (CS5702_W1_Lab_2025.Rmd)
+cat("\n=== Range Checks for Continuous Variables ===\n")
+numeric_variables <- sapply(working_dataset, is.numeric)  # Week 2: is.numeric() type checking
+for(var in names(working_dataset)[numeric_variables]) {
+  cat("\n", var, ":\n")
+  cat("  Min:", min(working_dataset[[var]], na.rm = TRUE), "\n")  # Week 1: min() function
+  cat("  Max:", max(working_dataset[[var]], na.rm = TRUE), "\n")  # Week 1: max() function
+  cat("  Mean:", mean(working_dataset[[var]], na.rm = TRUE), "\n")  # Week 1: mean() function
+  cat("  Median:", median(working_dataset[[var]], na.rm = TRUE), "\n")  # Week 1: median() function
+}
+
+# 6. Level checks for categorical variables
+# Week 1: Factor and table() functions (CS5702_W1_Lab_2025.Rmd)
+cat("\n=== Level Checks for Categorical Variables ===\n")
+factor_variables <- sapply(working_dataset, is.factor)  # Week 2: is.factor() type checking
+for(var in names(working_dataset)[factor_variables]) {
+  cat("\n", var, ":\n")
+  cat("  Levels:", paste(levels(working_dataset[[var]]), collapse = ", "), "\n")  # Week 2: levels() function
+  cat("  Counts:\n")
+  print(table(working_dataset[[var]], useNA = "ifany"))  # Week 1: table() for frequency counts
+}
+
+# 7. Check for inconsistent coding (e.g., "Yes"/"yes", "M"/"Male")
+cat("\n=== Inconsistency Checks ===\n")
+character_variables <- sapply(working_dataset, is.character)
+for(var in names(working_dataset)[character_variables]) {
+  unique_values <- unique(working_dataset[[var]])
+  cat("\n", var, "unique values:", paste(unique_values, collapse = ", "), "\n")
+}
+```
+
+## 1.3 Data quality analysis findings
+
+```{r}
+# Additional code supporting data quality findings
+# Detailed analysis of each identified issue
+
+# Issue 1: Detailed missing value pattern analysis
+cat("=== Missing Value Pattern Analysis ===\n")
+# Check if missingness is random or systematic
+missing_pattern_matrix <- is.na(working_dataset)
+missing_per_row <- rowSums(missing_pattern_matrix)
+cat("Observations with missing values:", sum(missing_per_row > 0), "\n")
+cat("Observations with multiple missing values:", sum(missing_per_row > 1), "\n")
+
+# Visualize missing data pattern
+if(require(VIM)) {
+  aggr(working_dataset, col = c('navyblue', 'red'), numbers = TRUE, 
+       sortVars = TRUE, labels = names(working_dataset), cex.axis = 0.7, 
+       gap = 3, ylab = c("Missing data", "Pattern"))
+}
+
+# Issue 2: Detailed data type analysis
+cat("\n=== Detailed Data Type Analysis ===\n")
+# Check if binary variables are coded appropriately
+for(var in names(working_dataset)) {
+  unique_vals <- unique(working_dataset[[var]][!is.na(working_dataset[[var]])])
+  if(length(unique_vals) == 2) {
+    cat("\n", var, "appears binary with values:", paste(unique_vals, collapse = ", "), "\n")
+    cat("  Current class:", class(working_dataset[[var]]), "\n")
+    if(is.numeric(working_dataset[[var]])) {
+      cat("  WARNING: Binary variable stored as numeric\n")
+    }
+  }
+}
+
+# Issue 3: Comprehensive outlier detection
+cat("\n=== Comprehensive Outlier Detection ===\n")
+# Multiple methods for outlier detection
+
+# Method 1: IQR method
+identify_outliers_iqr <- function(x, var_name) {
+  Q1 <- quantile(x, 0.25, na.rm = TRUE)
+  Q3 <- quantile(x, 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  lower <- Q1 - 1.5 * IQR
+  upper <- Q3 + 1.5 * IQR
+  outliers <- which(x < lower | x > upper)
+  return(list(var = var_name, count = length(outliers), indices = outliers))
+}
+
+# Method 2: Z-score method
+identify_outliers_zscore <- function(x, var_name, threshold = 3) {
+  z_scores <- abs(scale(x))
+  outliers <- which(z_scores > threshold, arr.ind = TRUE)
+  return(list(var = var_name, count = length(outliers), indices = outliers))
+}
+
+# Apply to all numeric variables
+numeric_variables <- names(working_dataset)[sapply(working_dataset, is.numeric)]
+outlier_results <- list()
+
+for(var in numeric_variables) {
+  cat("\n", var, ":\n")
+  iqr_outliers <- identify_outliers_iqr(working_dataset[[var]], var)
+  zscore_outliers <- identify_outliers_zscore(working_dataset[[var]], var)
+  cat("  IQR method outliers:", iqr_outliers$count, "\n")
+  cat("  Z-score method outliers:", zscore_outliers$count, "\n")
+  outlier_results[[var]] <- list(iqr = iqr_outliers, zscore = zscore_outliers)
+}
+```
+
+## 1.4 Data cleaning
+
+```{r}
+# Complete data cleaning code
+# This section contains all cleaning operations applied
+
+# Create working copy
+cleaned_dataset <- working_dataset
+
+# Cleaning Step 1: Handle missing values
+# Detailed imputation process
+
+# For continuous variables: median imputation
+numeric_variables <- names(cleaned_dataset)[sapply(cleaned_dataset, is.numeric)]
+imputation_record <- data.frame(Variable = character(), 
+                           Method = character(), 
+                           Value = numeric(),
+                           Count = numeric())
+
+for(var in numeric_variables) {
+  missing_count <- sum(is.na(cleaned_dataset[[var]]))
+  if(missing_count > 0) {
+    median_value <- median(cleaned_dataset[[var]], na.rm = TRUE)
+    cleaned_dataset[[var]][is.na(cleaned_dataset[[var]])] <- median_value
+    imputation_record <- rbind(imputation_record, 
+                            data.frame(Variable = var,
+                                      Method = "Median",
+                                      Value = median_value,
+                                      Count = missing_count))
+  }
+}
+
+# For categorical variables: mode imputation
+calculate_mode <- function(x) {
+  ux <- unique(x[!is.na(x)])
+  ux[which.max(tabulate(match(x[!is.na(x)], ux)))]
+}
+
+factor_variables <- names(cleaned_dataset)[sapply(cleaned_dataset, is.factor)]
+for(var in factor_variables) {
+  missing_count <- sum(is.na(cleaned_dataset[[var]]))
+  if(missing_count > 0) {
+    mode_value <- calculate_mode(cleaned_dataset[[var]])
+    cleaned_dataset[[var]][is.na(cleaned_dataset[[var]])] <- mode_value
+    imputation_record <- rbind(imputation_record,
+                            data.frame(Variable = var,
+                                      Method = "Mode",
+                                      Value = NA,
+                                      Count = missing_count))
+  }
+}
+
+cat("=== Imputation Log ===\n")
+print(imputation_record)
+
+# Cleaning Step 2: Fix data types
+# Convert recycles_regularly to factor
+if(is.numeric(cleaned_dataset$recycles_regularly)) {
+  cleaned_dataset$recycles_regularly <- factor(cleaned_dataset$recycles_regularly,
+                                           levels = c(0, 1),
+                                           labels = c("No", "Yes"))
+}
+
+# Cleaning Step 3: Handle outliers
+winsorize_variable <- function(x, lower = 0.01, upper = 0.99) {
+  lower_bound <- quantile(x, lower, na.rm = TRUE)
+  upper_bound <- quantile(x, upper, na.rm = TRUE)
+  x[x < lower_bound] <- lower_bound
+  x[x > upper_bound] <- upper_bound
+  return(x)
+}
+
+# Apply winsorization to key variables
+if("carbon_footprint" %in% names(cleaned_dataset)) {
+  cleaned_dataset$carbon_footprint <- winsorize_variable(cleaned_dataset$carbon_footprint)
+}
+
+if("income" %in% names(cleaned_dataset)) {
+  cleaned_dataset$income <- winsorize_variable(cleaned_dataset$income)
+}
+
+# Verify cleaning results
+cat("\n=== Post-Cleaning Verification ===\n")
+cat("Remaining missing values:\n")
+print(colSums(is.na(cleaned_dataset)))
+
+cat("\nData types after cleaning:\n")
+print(sapply(cleaned_dataset, class))
+```
+
+# 2. Exploratory Data Analysis (EDA)
+
+```{r}
+# Comprehensive EDA code
+# All exploratory analyses conducted beyond the three selected elements
+
+# 1. Univariate analysis for all variables
+cat("=== Univariate Analysis ===\n")
+
+# Continuous variables: histograms and summary statistics
+numeric_variables <- names(cleaned_dataset)[sapply(cleaned_dataset, is.numeric)]
+for(var in numeric_variables) {
+  cat("\n", var, "Summary:\n")
+  print(summary(cleaned_dataset[[var]]))
+  
+  # Create histogram
+  p <- ggplot(cleaned_dataset, aes_string(x = var)) +
+    geom_histogram(bins = 30, fill = "coral", alpha = 0.7) +
+    theme_minimal() +
+    labs(title = paste("Distribution of", var))
+  print(p)
+}
+
+# Categorical variables: frequency tables
+factor_variables <- names(cleaned_dataset)[sapply(cleaned_dataset, is.factor)]
+for(var in factor_variables) {
+  cat("\n", var, "Frequency Table:\n")
+  print(table(cleaned_dataset[[var]], useNA = "ifany"))
+  
+  # Create bar chart
+  p <- ggplot(cleaned_dataset, aes_string(x = var)) +
+    geom_bar(fill = "navyblue", alpha = 0.7) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = paste("Frequency of", var))
+  print(p)
+}
+
+# 2. Bivariate analysis: relationships with carbon_footprint
+cat("\n=== Bivariate Analysis with Carbon Footprint ===\n")
+
+# Scatterplots for continuous predictors
+if("carbon_footprint" %in% names(cleaned_dataset)) {
+  for(var in numeric_variables[numeric_variables != "carbon_footprint"]) {
+    p <- ggplot(cleaned_dataset, aes_string(x = var, y = "carbon_footprint")) +
+      geom_point(alpha = 0.5) +
+      geom_smooth(method = "lm", se = TRUE) +
+      theme_minimal() +
+      labs(title = paste("Carbon Footprint vs", var),
+           x = var,
+           y = "Carbon Footprint")
+    print(p)
+    
+    # Calculate correlation
+    cor_value <- cor(cleaned_dataset[[var]], cleaned_dataset$carbon_footprint, use = "complete.obs")
+    cat("\nCorrelation between", var, "and carbon_footprint:", round(cor_value, 3), "\n")
+  }
+  
+  # Boxplots for categorical predictors
+  for(var in factor_variables) {
+    p <- ggplot(cleaned_dataset, aes_string(x = var, y = "carbon_footprint", fill = var)) +
+      geom_boxplot(alpha = 0.7) +
+      theme_minimal() +
+      theme(legend.position = "none") +
+      labs(title = paste("Carbon Footprint by", var),
+           x = var,
+           y = "Carbon Footprint")
+    print(p)
+  }
+}
+
+# 3. Bivariate analysis: relationships with recycles_regularly
+cat("\n=== Bivariate Analysis with Recycling Behavior ===\n")
+
+if("recycles_regularly" %in% names(cleaned_dataset)) {
+  # Boxplots for continuous predictors
+  for(var in numeric_variables) {
+    p <- ggplot(cleaned_dataset, aes_string(x = "recycles_regularly", y = var, 
+                                        fill = "recycles_regularly")) +
+      geom_boxplot(alpha = 0.7) +
+      theme_minimal() +
+      theme(legend.position = "none") +
+      labs(title = paste(var, "by Recycling Behavior"),
+           x = "Regularly Recycles",
+           y = var)
+    print(p)
+    
+    # Statistical test
+    t_test_result <- t.test(cleaned_dataset[[var]] ~ cleaned_dataset$recycles_regularly)
+    cat("\n", var, "t-test p-value:", format.pval(t_test_result$p.value, digits = 4), "\n")
+  }
+  
+  # Contingency tables for categorical predictors
+  for(var in factor_variables[factor_variables != "recycles_regularly"]) {
+    contingency_table <- table(cleaned_dataset[[var]], cleaned_dataset$recycles_regularly)
+    cat("\n", var, "vs recycles_regularly:\n")
+    print(contingency_table)
+    
+    # Chi-square test
+    chi_test_result <- chisq.test(contingency_table)
+    cat("Chi-square p-value:", format.pval(chi_test_result$p.value, digits = 4), "\n")
+  }
+}
+
+# 4. Multicollinearity check
+cat("\n=== Multicollinearity Analysis ===\n")
+numeric_vars_for_correlation <- numeric_variables[numeric_variables != "carbon_footprint"]
+if(length(numeric_vars_for_correlation) > 1) {
+  correlation_matrix <- cor(cleaned_dataset[, numeric_vars_for_correlation], use = "complete.obs")
+  print(round(correlation_matrix, 3))
+  
+  # Visualize correlation matrix
+  corrplot(correlation_matrix, method = "color", type = "upper", 
+           order = "hclust", tl.cex = 0.8, tl.col = "black")
+  
+  # Identify high correlations (> 0.7)
+  high_correlations <- which(abs(correlation_matrix) > 0.7 & abs(correlation_matrix) < 1, arr.ind = TRUE)
+  if(nrow(high_correlations) > 0) {
+    cat("\nHigh correlations detected (> 0.7):\n")
+    for(i in 1:nrow(high_correlations)) {
+      row_name <- rownames(correlation_matrix)[high_correlations[i, 1]]
+      col_name <- colnames(correlation_matrix)[high_correlations[i, 2]]
+      cor_value <- correlation_matrix[high_correlations[i, 1], high_correlations[i, 2]]
+      cat(row_name, "vs", col_name, ":", round(cor_value, 3), "\n")
+    }
+  }
+}
+```
+
+# 3. Modelling
+
+```{r}
+# Complete modeling process for carbon_footprint
+# All model attempts from initial to final
+
+# Model 1: Maximal model with all predictors
+# Week 7: Maximal model approach (lab-7n-part2-a-solution.Rmd)
+cat("=== Model 1: Maximal Model ===\n")
+explanatory_variables <- names(cleaned_dataset)[names(cleaned_dataset) != "carbon_footprint"]
+# Week 6: lm() for linear regression (lab-5-part-2-a-solution.Rmd)
+model_1 <- lm(carbon_footprint ~ ., data = cleaned_dataset[, c("carbon_footprint", explanatory_variables)])
+summary(model_1)  # Week 6: summary() for model output
+cat("AIC:", AIC(model_1), "\n")  # Week 7: AIC for model comparison
+
+# Model 2: Model with only continuous predictors
+cat("\n=== Model 2: Continuous Predictors Only ===\n")
+continuous_predictors <- numeric_variables[numeric_variables != "carbon_footprint"]
+if(length(continuous_predictors) > 0) {
+  model_2 <- lm(carbon_footprint ~ ., 
+               data = cleaned_dataset[, c("carbon_footprint", continuous_predictors)])
+  summary(model_2)
+  cat("AIC:", AIC(model_2), "\n")
+}
+
+# Model 3: Stepwise selection from maximal model
+# Week 7: step() function for automated model selection (lab-7n-part2-a-solution.Rmd)
+cat("\n=== Model 3: Stepwise Selection ===\n")
+model_3 <- step(model_1, direction = "backward", trace = 1)  # Week 7: step() function
+summary(model_3)
+cat("AIC:", AIC(model_3), "\n")
+
+# Model 4: Manual selection based on EDA findings
+cat("\n=== Model 4: Manual Selection Based on EDA ===\n")
+# Select variables with strong correlations or significant associations
+# This would be customized based on actual EDA findings
+model_4 <- lm(carbon_footprint ~ income + household_size, data = cleaned_dataset)
+summary(model_4)
+cat("AIC:", AIC(model_4), "\n")
+
+# Model comparison
+cat("\n=== Model Comparison ===\n")
+model_list <- list(Model1 = model_1, Model3 = model_3, Model4 = model_4)
+aic_scores <- sapply(model_list, AIC)
+r_squared_values <- sapply(model_list, function(m) summary(m)$r.squared)
+adj_r_squared_values <- sapply(model_list, function(m) summary(m)$adj.r.squared)
+
+comparison_table <- data.frame(
+  Model = names(model_list),
+  AIC = aic_scores,
+  R_squared = r_squared_values,
+  Adj_R_squared = adj_r_squared_values
+)
+print(comparison_table)
+
+# Diagnostic plots for all models
+for(i in 1:length(model_list)) {
+  cat("\n=== Diagnostic Plots for", names(model_list)[i], "===\n")
+  par(mfrow = c(2, 2))
+  plot(model_list[[i]], main = names(model_list)[i])
+  par(mfrow = c(1, 1))
+}
+
+# VIF check for final model
+cat("\n=== Variance Inflation Factors ===\n")
+if(require(car)) {
+  vif_scores <- vif(model_3)
+  print(vif_scores)
+  cat("\nVIF > 5 indicates potential multicollinearity\n")
+}
+```
+
+# 4. Modelling another dependent variable
+
+```{r}
+# Complete modeling process for recycles_regularly
+# All logistic regression attempts
+
+# Ensure proper factor coding
+if(!is.factor(cleaned_dataset$recycles_regularly)) {
+  cleaned_dataset$recycles_regularly <- as.factor(cleaned_dataset$recycles_regularly)
+}
+
+# Model 1: Maximal logistic model
+# Week 8: Logistic regression maximal model (lab8n-part2-a-solution.Rmd)
+cat("=== Logistic Model 1: Maximal Model ===\n")
+explanatory_vars_logit <- names(cleaned_dataset)[names(cleaned_dataset) != "recycles_regularly"]
+# Week 8: glm() with family = binomial for logistic regression (lab8n-part2-a-solution.Rmd)
+logit_model_1 <- glm(recycles_regularly ~ ., 
+                    data = cleaned_dataset[, c("recycles_regularly", explanatory_vars_logit)],
+                    family = binomial(link = "logit"))  # Week 8: binomial family
+summary(logit_model_1)  # Week 8: summary() for logistic regression
+cat("AIC:", AIC(logit_model_1), "\n")  # Week 8: AIC for logistic models
+cat("Deviance:", logit_model_1$deviance, "\n")  # Week 8: Deviance statistic
+
+# Model 2: Stepwise selection
+# Week 7: step() applied to logistic regression (lab-7n-part2-a-solution.Rmd)
+cat("\n=== Logistic Model 2: Stepwise Selection ===\n")
+logit_model_2 <- step(logit_model_1, direction = "backward", trace = 1)  # Week 7: step() function
+summary(logit_model_2)
+cat("AIC:", AIC(logit_model_2), "\n")
+cat("Deviance:", logit_model_2$deviance, "\n")
+
+# Model 3: Model with key predictors from EDA
+cat("\n=== Logistic Model 3: Key Predictors ===\n")
+# Based on EDA findings, include variables with significant associations
+logit_model_3 <- glm(recycles_regularly ~ carbon_footprint + income, 
+                    data = cleaned_dataset,
+                    family = binomial(link = "logit"))
+summary(logit_model_3)
+cat("AIC:", AIC(logit_model_3), "\n")
+
+# Model comparison
+cat("\n=== Logistic Model Comparison ===\n")
+logit_model_list <- list(Model1 = logit_model_1, Model2 = logit_model_2, Model3 = logit_model_3)
+logit_aic_scores <- sapply(logit_model_list, AIC)
+logit_deviance_scores <- sapply(logit_model_list, function(m) m$deviance)
+logit_pseudo_r2_scores <- sapply(logit_model_list, function(m) {
+  1 - (m$deviance / m$null.deviance)
+})
+
+logit_comparison_table <- data.frame(
+  Model = names(logit_model_list),
+  AIC = logit_aic_scores,
+  Deviance = logit_deviance_scores,
+  Pseudo_R2 = logit_pseudo_r2_scores
+)
+print(logit_comparison_table)
+
+# Diagnostic plots for logistic models
+for(i in 1:length(logit_model_list)) {
+  cat("\n=== Diagnostic Plots for", names(logit_model_list)[i], "===\n")
+  par(mfrow = c(2, 2))
+  plot(logit_model_list[[i]], main = names(logit_model_list)[i])
+  par(mfrow = c(1, 1))
+}
+
+# Calculate odds ratios for all models
+# Week 8: Odds ratios for logistic regression interpretation (lab8n-part2-a-solution.Rmd)
+cat("\n=== Odds Ratios for All Models ===\n")
+for(i in 1:length(logit_model_list)) {
+  cat("\n", names(logit_model_list)[i], "Odds Ratios:\n")
+  odds_ratios <- exp(coef(logit_model_list[[i]]))  # Week 8: exp(coef()) for odds ratios
+  print(round(odds_ratios, 4))
+}
+
+# Classification performance
+cat("\n=== Classification Performance ===\n")
+# For final model (logit_model_2)
+predicted_probabilities <- predict(logit_model_2, type = "response")
+predicted_classes <- ifelse(predicted_probabilities > 0.5, "Yes", "No")
+predicted_classes <- factor(predicted_classes, levels = c("No", "Yes"))
+
+# Confusion matrix
+confusion_table <- table(Predicted = predicted_classes, 
+                         Actual = cleaned_dataset$recycles_regularly)
+print(confusion_table)
+
+# Calculate accuracy
+classification_accuracy <- sum(diag(confusion_table)) / sum(confusion_table)
+cat("Classification Accuracy:", round(classification_accuracy, 3), "\n")
+```
+
+# References
+
+Wickham, H., & Grolemund, G. (2017). *R for Data Science: Import, Tidy, Transform, Visualize, and Model Data*. O'Reilly Media.
+
+James, G., Witten, D., Hastie, T., & Tibshirani, R. (2021). *An Introduction to Statistical Learning: with Applications in R* (2nd ed.). Springer.
+
+Field, A., Miles, J., & Field, Z. (2012). *Discovering Statistics Using R*. SAGE Publications.
+
+
+
+
