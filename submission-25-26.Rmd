@@ -1,5 +1,4 @@
 ---
-title: "CS5801 Coursework SUBMISSION"
 author: "2541119"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 output:
